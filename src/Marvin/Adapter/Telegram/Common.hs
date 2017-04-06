@@ -177,7 +177,7 @@ stripWhiteSpaceMay :: L.Text -> Maybe L.Text
 stripWhiteSpaceMay t =
     case L.uncons t of
         Just (c, _) | isSpace c -> Just $ L.stripStart t
-        _ -> Nothing
+        _           -> Nothing
 
 runnerImpl :: forall a. MkTelegram a => RunWithAdapter (TelegramAdapter a)
 runnerImpl handler = do
@@ -197,8 +197,8 @@ runnerImpl handler = do
                 let lmsg = L.toLower strippedMsg
                 liftIO $ handler $ case (chat^.type_, asum $ map ((\prefix -> if prefix `L.isPrefixOf` lmsg then Just $ L.drop (L.length prefix) strippedMsg else Nothing) >=> stripWhiteSpaceMay) [botname, L.cons '@' botname, L.cons '/' botname]) of
                     (PrivateChat, _) -> CommandEvent u chat msg ts
-                    (_, Nothing) -> ev
-                    (_, Just m') -> CommandEvent u chat m' ts
+                    (_, Nothing)     -> ev
+                    (_, Just m')     -> CommandEvent u chat m' ts
             Ev ev -> liftIO $ handler ev
             Ignored -> return ()
             Unhandeled -> logDebugN $(isT "Unhadeled event.")
@@ -225,3 +225,4 @@ instance MkTelegram a => IsAdapter (TelegramAdapter a) where
         logErrorN "User resolving not supported"
         return Nothing
     messageChannel = messageChannelImpl
+    getBotInfo = undefined

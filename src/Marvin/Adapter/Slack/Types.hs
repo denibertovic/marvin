@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE FunctionalDependencies     #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -14,9 +15,11 @@ import qualified Data.ByteString.Lazy.Char8     as BS
 import           Data.Foldable                  (toList)
 import           Data.Hashable
 import           Data.HashMap.Strict            (HashMap)
-import           Data.String                    (IsString (..))
+import           Data.IORef                     (IORef(..))
+import           Data.String                    (IsString(..))
 import qualified Data.Text                      as T
 import qualified Data.Text.Lazy                 as L
+import           GHC.Generics                   (Generic)
 import           Marvin.Adapter
 import           Network.URI
 
@@ -34,7 +37,7 @@ type APIResponse a = Either String a
 
 
 -- | Identifier for a user (internal and not equal to the username)
-newtype SlackUserId = SlackUserId T.Text deriving (IsString, Eq, Hashable)
+newtype SlackUserId = SlackUserId T.Text deriving (IsString, Eq, Hashable, Show)
 -- | Identifier for a channel (internal and not equal to the channel name)
 newtype SlackChannelId = SlackChannelId T.Text deriving (IsString, Eq, Show, Hashable)
 
@@ -61,7 +64,7 @@ declareFields [d|
     data UserInfo = UserInfo
         { userInfoUsername :: L.Text
         , userInfoIdValue  :: SlackUserId
-        }
+        } deriving (Show)
     |]
 
 
@@ -98,11 +101,18 @@ data InternalType a
     | OkResponseEvent T.Text
 
 
+-- | Record for holding useful bot information
+data SlackBotInfo = SlackBotInfo
+    { botId    :: SlackUserId
+    } deriving (Eq, Show, Generic)
+
+
 -- | Adapter for interacting with Slack API\'s. Polymorphic over the method for retrieving events.
 data SlackAdapter a = SlackAdapter
     { channelCache  :: MVar ChannelCache
     , userInfoCache :: MVar UserCache
     , outChannel    :: Chan (SlackChannelId, L.Text)
+    , botInfo       :: IORef (Maybe SlackBotInfo)
     }
 
 
@@ -122,9 +132,11 @@ helloParser = withObject "expected object" $ \o -> do
 
 
 userInfoParser :: Value -> Parser UserInfo
-userInfoParser = withObject "expected object" $ \o ->
-    o .: "user" >>= withObject "expected object" (\o' -> UserInfo <$> o' .: "name" <*> o' .: "id")
+userInfoParser = withObject "expected object" (\o' -> UserInfo <$> o' .: "name" <*> o' .: "id")
 
+-- botInfoParser :: Value -> Parser SlackBotInfo
+-- botInfoParser = withObject "expected object" $ \o ->
+--     o .: "user" >>= withObject "expected object" (\o' -> SlackBotInfo <$> o' .: "id")
 
 userInfoListParser :: Value -> Parser [UserInfo]
 userInfoListParser = withArray "expected array" (fmap toList . mapM userInfoParser)

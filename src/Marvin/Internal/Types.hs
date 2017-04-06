@@ -14,6 +14,7 @@ import           Control.Monad.Logger
 import           Control.Monad.Reader
 import           Control.Monad.State
 import           Control.Monad.Trans.Control
+import           Data.Aeson                  (FromJSON (..))
 import           Data.Char                   (isAlphaNum, isLetter)
 import qualified Data.Configurator.Types     as C
 import qualified Data.HashMap.Strict         as HM
@@ -62,6 +63,8 @@ class IsAdapter a where
     type User a
     -- | Concrete, adapter specific representation of a channel. Could be an id string or a full object for instance
     type Channel a
+    -- | Concrete, adapter specific representation of bot info
+    type BotInfo a
     -- | Used for scoping config and logging
     adapterId :: AdapterId a
     -- | Post a message to a channel given the internal channel identifier
@@ -78,7 +81,7 @@ class IsAdapter a where
     resolveChannel :: L.Text -> AdapterM a (Maybe (Channel a))
     -- | Resolve to the internal user structure given a human readable name
     resolveUser :: L.Text -> AdapterM a (Maybe (User a))
-
+    getBotInfo :: AdapterM a (BotInfo a)
 
 -- | Wrapping type for users. Only used to enable 'Get' typeclass instances.
 newtype User' a = User' {unwrapUser' :: User a}
@@ -323,10 +326,10 @@ class (IsScript m, MonadIO m) => HasConfigAccess m where
 instance C.Configured LogLevel where
     convert (C.String s) =
         case T.strip $ T.toLower s of
-            "debug" -> Just LevelDebug
+            "debug"   -> Just LevelDebug
             "warning" -> Just LevelWarn
-            "error" -> Just LevelError
-            "info" -> Just LevelInfo
-            _ -> Nothing
+            "error"   -> Just LevelError
+            "info"    -> Just LevelInfo
+            _         -> Nothing
     convert _            = Nothing
 

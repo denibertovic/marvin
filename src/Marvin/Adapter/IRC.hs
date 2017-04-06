@@ -73,7 +73,7 @@ processor inChan handler = do
                 let ev = fmap (L.fromStrict . T.decodeUtf8) rawEv
                 ts <- liftIO $ TimeStamp <$> getCurrentTime
                 let (user, channel) = case _source ev of
-                                        User nick -> (nick, Direct nick)
+                                        User nick         -> (nick, Direct nick)
                                         Channel chan user -> (user, RealChannel chan)
                 case _message ev of
                     Privmsg target (Right msg) -> do
@@ -139,7 +139,7 @@ instance IsAdapter IRCAdapter where
         writeChan msgOutChan $ msgType $ Right msg
       where
         msgType = case chan of
-                      Direct n -> Privmsg n
+                      Direct n      -> Privmsg n
                       RealChannel c -> Notice c
 
     -- TODO Perhaps these resolving funtions should be changed such that
@@ -159,6 +159,7 @@ instance IsAdapter IRCAdapter where
         inChan <- newChan
         a <- async $ processor inChan handler
         link a
-        liftIO $ do 
+        liftIO $ do
             setUp msgOutChan user channels
             ircClient port host (return ()) (consumer inChan) (producer msgOutChan)
+    getBotInfo = undefined

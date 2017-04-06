@@ -4,6 +4,7 @@ module Util where
 import           Control.Monad
 import           Data.Aeson.Types
 import qualified Data.Text               as T
+import qualified Data.Text.Lazy          as L
 import           Data.Time.Clock.POSIX
 import           Marvin.Internal.Types
 import           Marvin.Interpolate.Text
@@ -32,3 +33,8 @@ timestampFromNumber :: Value -> Parser TimeStamp
 timestampFromNumber (Number n) = return $ TimeStamp $ posixSecondsToUTCTime $ realToFrac n
 timestampFromNumber (String s) = maybe mzero (return . TimeStamp . posixSecondsToUTCTime . realToFrac) (readMaybe (T.unpack s) :: Maybe Double)
 timestampFromNumber _ = mzero
+
+-- | Helper function for changing some_name into <@some_name>
+constructMentionName :: L.Text -> L.Text
+constructMentionName name = L.append (L.cons '<' $ L.cons '@' name) ">"
+

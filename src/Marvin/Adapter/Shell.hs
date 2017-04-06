@@ -94,3 +94,4 @@ instance IsAdapter ShellAdapter where
                             putMVar out Nothing
                         whileJust_ (liftIO $ takeMVar out) $ outputStrLn . L.unpack
                         liftIO $ wait h
+    getBotInfo = undefined

@@ -1,6 +1,6 @@
-{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleInstances   #-}
+{-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE NamedFieldPuns    #-}
 module Marvin.Adapter.Slack.Common where
 
 
@@ -19,6 +19,8 @@ import qualified Data.ByteString.Lazy.Char8      as BS
 import           Data.Char                       (isSpace)
 import           Data.Foldable                   (asum)
 import qualified Data.HashMap.Strict             as HM
+import           Data.IORef                      (modifyIORef, readIORef)
+import           Data.IORef.Lifted               (newIORef)
 import qualified Data.Text                       as T
 import qualified Data.Text.Lazy                  as L
 import           Marvin.Adapter                  hiding (mkAdapterId)
@@ -55,20 +57,20 @@ eventParser v@(Object o) = isErrParser <|> isOkParser <|> hasTypeParser
 
         -- https://api.slack.com/rtm
         case t of
-            "error" -> Error <$> o .: "code" <*> o .: "msg"
-            "message" -> messageTypeEvent
-            "message.channels" -> messageTypeEvent
-            "message.groups" -> messageTypeEvent
-            "message.im" -> messageTypeEvent
-            "message.mpim" -> messageTypeEvent
-            "reconnect_url" -> return Ignored
-            "channel_archive" -> ChannelArchiveStatusChange <$> o .: "channel" <*> pure True
+            "error"             -> Error <$> o .: "code" <*> o .: "msg"
+            "message"           -> messageTypeEvent
+            "message.channels"  -> messageTypeEvent
+            "message.groups"    -> messageTypeEvent
+            "message.im"        -> messageTypeEvent
+            "message.mpim"      -> messageTypeEvent
+            "reconnect_url"     -> return Ignored
+            "channel_archive"   -> ChannelArchiveStatusChange <$> o .: "channel" <*> pure True
             "channel_unarchive" -> ChannelArchiveStatusChange <$> o .: "channel" <*> pure False
-            "channel_created" -> ChannelCreated <$> (o .: "channel" >>= lciParser)
-            "channel_deleted" -> ChannelDeleted <$> o .: "channel"
-            "channel_rename" -> ChannelRename <$> (o .: "channel" >>= lciParser)
-            "user_change" -> UserChange <$> (o .: "user" >>= userInfoParser)
-            _ -> return $ Unhandeled t
+            "channel_created"   -> ChannelCreated <$> (o .: "channel" >>= lciParser)
+            "channel_deleted"   -> ChannelDeleted <$> o .: "channel"
+            "channel_rename"    -> ChannelRename <$> (o .: "channel" >>= lciParser)
+            "user_change"       -> UserChange <$> (o .: "user" >>= userInfoParser)
+            _                   -> return $ Unhandeled t
     messageTypeEvent = do
         subt <- o .:? "subtype"
         SlackEvent <$> case (subt :: Maybe T.Text) of
@@ -97,20 +99,30 @@ stripWhiteSpaceMay :: L.Text -> Maybe L.Text
 stripWhiteSpaceMay t =
     case L.uncons t of
         Just (c, _) | isSpace c -> Just $ L.stripStart t
-        _ -> Nothing
+        _           -> Nothing
 
 
 runHandlerLoop :: MkSlack a => Chan (InternalType a) -> EventHandler (SlackAdapter a) -> AdapterM (SlackAdapter a) ()
-runHandlerLoop evChan handler =
+runHandlerLoop evChan handler = do
+    SlackAdapter{botInfo} <- getAdapter
+    botname <- getBotname
+    i <- resolveUser botname
+    case i of
+      Nothing  -> error "Error getting Bot ID"
+      Just sid -> liftIO $ modifyIORef botInfo (const $ Just $ SlackBotInfo sid)
     forever $ do
         d <- readChan evChan
         void $ async $ case d of
             SlackEvent ev@(MessageEvent u c m t) -> do
-
                 botname <- L.toLower <$> getBotname
+                (SlackUserId i) <- botId <$> getBotInfo
+                let slackBotId = L.toLower . L.fromStrict $ i
+                logDebugN $(isT "Slack bot ID is: #{slackBotId}")
                 let strippedMsg = L.stripStart m
                 let lmsg = L.toLower strippedMsg
-                liftIO $ handler $ case asum $ map ((\prefix -> if prefix `L.isPrefixOf` lmsg then Just $ L.drop (L.length prefix) strippedMsg else Nothing) >=> stripWhiteSpaceMay) [botname, L.cons '@' botname, L.cons '/' botname] of
+                logDebugN $(isT "Received message: #{lmsg}")
+                let prefixes = [botname, constructMentionName slackBotId, L.cons '/' slackBotId]
+                liftIO $ handler $ case asum $ map ((\prefix -> if prefix `L.isPrefixOf` lmsg then Just $ L.drop (L.length prefix) strippedMsg else Nothing) >=> stripWhiteSpaceMay) prefixes of
                     Nothing -> ev
                     Just m' -> CommandEvent u c m' t
 
@@ -202,7 +214,7 @@ resolveChannelImpl name' = do
             Nothing -> do
                 refreshed <- refreshChannels
                 case refreshed of
-                    Left err -> logErrorN $(isT "#{err}") >> return (cc, Nothing)
+                    Left err  -> logErrorN $(isT "#{err}") >> return (cc, Nothing)
                     Right ncc -> return (ncc, ncc ^? nameResolver . ix name)
             Just found -> return (cc, Just found)
   where name = L.tail name'
@@ -212,7 +224,7 @@ refreshUserInfo ::  MkSlack a => AdapterM (SlackAdapter a) (Either String UserCa
 refreshUserInfo = do
     users <- execAPIMethod (\o -> o .: "members" >>= userInfoListParser) "users.list" []
     case users of
-        Left err -> return $ Left $ "Error when getting channel data " ++ err
+        Left err -> return $ Left $ "Error when getting user data " ++ err
         Right v -> do
             let cmap = HM.fromList $ map ((^. idValue) &&& id) v
                 nmap = HM.fromList $ map ((^. username) &&& (^. idValue)) v
@@ -228,7 +240,7 @@ resolveUserImpl name = do
             Nothing -> do
                 refreshed <- refreshUserInfo
                 case refreshed of
-                    Left err -> logErrorN $(isT "#{err}") >> return (cc, Nothing)
+                    Left err  -> logErrorN $(isT "#{err}") >> return (cc, Nothing)
                     Right ncc -> return (ncc, ncc ^? nameResolver . ix name)
             Just found -> return (cc, Just found)
 
@@ -239,9 +251,17 @@ getChannelNameImpl channel = do
     cc <- readMVar $ channelCache adapter
     L.cons '#' <$>
         case cc ^? infoCache . ix channel of
-            Nothing -> (^.name) <$> refreshSingleChannelInfo channel
+            Nothing    -> (^.name) <$> refreshSingleChannelInfo channel
             Just found -> return $ found ^. name
 
+
+getBotInfoImpl :: MkSlack a => AdapterM (SlackAdapter a) SlackBotInfo
+getBotInfoImpl = do
+    SlackAdapter{botInfo} <- getAdapter
+    val <- liftIO $ readIORef botInfo
+    case val of
+      Nothing -> error "Unitialized BotInfo"
+      Just v  -> return v
 
 
 putChannel :: LimitedChannelInfo -> AdapterM (SlackAdapter a) ()
@@ -288,10 +308,12 @@ class MkSlack a where
 instance MkSlack a => IsAdapter (SlackAdapter a) where
     type User (SlackAdapter a) = SlackUserId
     type Channel (SlackAdapter a) = SlackChannelId
+    type BotInfo (SlackAdapter a) = SlackBotInfo
     initAdapter = SlackAdapter
         <$> newMVar (ChannelCache mempty mempty)
         <*> newMVar (UserCache mempty mempty)
         <*> newChan
+        <*> newIORef Nothing
     adapterId = mkAdapterId
     messageChannel = messageChannelImpl
     runWithAdapter = runnerImpl
@@ -299,4 +321,5 @@ instance MkSlack a => IsAdapter (SlackAdapter a) where
     getChannelName = getChannelNameImpl
     resolveChannel = resolveChannelImpl
     resolveUser = resolveUserImpl
+    getBotInfo = getBotInfoImpl
 
